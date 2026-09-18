@@ -196,9 +196,16 @@ def format_summary(target_date: date, per_son: dict) -> str:
 
 def send_telegram(text: str) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    # TELEGRAM_CHAT_ID can hold one id or several, comma-separated
-    # (e.g. "111111111,222222222,333333333") — the same message goes to everyone listed.
-    chat_ids = [c.strip() for c in os.environ["TELEGRAM_CHAT_ID"].split(",") if c.strip()]
+    # On an on-demand "дз" request (see dz_on_demand.yml), TELEGRAM_REPLY_CHAT_ID
+    # is set to just the person who asked — reply only to them. Otherwise (the
+    # daily scheduled run) fall back to the full TELEGRAM_CHAT_ID broadcast list,
+    # which can hold one id or several, comma-separated
+    # (e.g. "111111111,222222222,333333333").
+    reply_to = os.environ.get("TELEGRAM_REPLY_CHAT_ID", "").strip()
+    if reply_to:
+        chat_ids = [reply_to]
+    else:
+        chat_ids = [c.strip() for c in os.environ["TELEGRAM_CHAT_ID"].split(",") if c.strip()]
     api_url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     # Telegram messages are capped at 4096 chars — split on line boundaries if needed.
