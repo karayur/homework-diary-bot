@@ -1,0 +1,46 @@
+name: DZ on-demand reply
+
+# Fired by the Cloudflare Worker (cloudflare-worker/worker.js) the instant
+# someone sends "дз" (any case/punctuation) to the bot. Replies only to
+# whoever asked, with homework for the nearest school day — same logic as
+# the daily scheduled check, just addressed to one chat instead of the
+# broadcast list.
+on:
+  repository_dispatch:
+    types: [dz_request]
+  workflow_dispatch: {}   # lets you test manually from the Actions tab too
+
+jobs:
+  reply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Reply with homework for the nearest school day
+        env:
+          DIARY_LOGIN: ${{ secrets.DIARY_LOGIN }}
+          DIARY_PASSWORD: ${{ secrets.DIARY_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Only set on a real repository_dispatch (has client_payload.chat_id);
+          # a manual workflow_dispatch test run falls back to the full broadcast list.
+          TELEGRAM_REPLY_CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        run: python homework_check.py
+
+      - name: Upload debug screenshots (only created on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots-ondemand
+          path: debug_*.png
+          if-no-files-found: ignore
