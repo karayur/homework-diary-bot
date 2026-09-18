@@ -136,13 +136,15 @@ second).
    the code next.
 3. Open the Worker → **Edit code**, delete everything, and paste in the
    contents of `cloudflare-worker/worker.js` from this project. **Deploy**.
-4. Back in the Worker's **Settings → Variables and Secrets**, add three
-   **secret** variables (not plain text — use "Encrypt"):
-   | Name | Value |
-   |---|---|
-   | `GITHUB_REPO` | `your-username/your-repo-name` |
-   | `GITHUB_TOKEN` | the fine-grained token from step 7.1 |
-   | `WEBHOOK_SECRET` | any random string you make up (e.g. 20+ random characters) |
+4. Back in the Worker's **Settings → Variables and Secrets**, add these
+   variables — `GITHUB_REPO` can stay plain text, the other three should
+   be **secret** (use "Encrypt"):
+   | Name | Value | Secret? |
+   |---|---|---|
+   | `GITHUB_REPO` | `your-username/your-repo-name` | no |
+   | `GITHUB_TOKEN` | the fine-grained token from step 7.1 | yes |
+   | `WEBHOOK_SECRET` | any random string you make up (e.g. 20+ random characters) | yes |
+   | `TELEGRAM_BOT_TOKEN` | the same bot token you already put in the GitHub secrets (step 3) | yes |
 5. Note the Worker's URL, shown at the top of its page — something like
    `https://dz-bot-webhook.<your-subdomain>.workers.dev`.
 
@@ -161,12 +163,15 @@ them.
 
 ### 7.4 Test it
 
-Send "дз" to the bot from your phone. Within a couple of minutes you
-should get the homework for the nearest school day back. If nothing
-arrives: check the Worker's **Logs** tab in Cloudflare (to confirm it
-received the message and called GitHub), and the **Actions** tab in
-GitHub for a "DZ on-demand reply" run (to see if it fired and whether it
-failed at login/scraping, same debugging as the daily job).
+Send "дз" to the bot from your phone. You should get "Подожди
+минуту-полторы, читаю дневник…" back almost instantly (that's the Worker
+itself replying), then the actual homework a minute or two later (that's
+the GitHub Actions job finishing). If the first message never arrives:
+check the Worker's **Logs** tab in Cloudflare (to confirm it received the
+message from Telegram). If the first message arrives but the homework
+never does: check the **Actions** tab in GitHub for a "DZ on-demand
+reply" run (to see if it fired and whether it failed at login/scraping,
+same debugging as the daily job).
 
 ### Notes on this part
 
