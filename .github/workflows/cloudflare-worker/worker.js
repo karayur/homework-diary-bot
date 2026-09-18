@@ -12,12 +12,16 @@
  *
  * Required Worker environment variables/secrets (set in the Cloudflare
  * dashboard under Settings → Variables and Secrets — see README):
- *   GITHUB_REPO     - "your-username/your-repo-name"
- *   GITHUB_TOKEN    - a GitHub personal access token that can dispatch
- *                      repository_dispatch events on that repo
- *   WEBHOOK_SECRET  - a random string you also pass to Telegram's
- *                      setWebhook (secret_token) — rejects anything that
- *                      isn't really from Telegram
+ *   GITHUB_REPO         - "your-username/your-repo-name"
+ *   GITHUB_TOKEN        - a GitHub personal access token that can dispatch
+ *                          repository_dispatch events on that repo
+ *   WEBHOOK_SECRET      - a random string you also pass to Telegram's
+ *                          setWebhook (secret_token) — rejects anything
+ *                          that isn't really from Telegram
+ *   TELEGRAM_BOT_TOKEN  - same bot token as in the GitHub secrets — lets
+ *                          the Worker send an instant "please wait" reply
+ *                          itself, before the actual GitHub Actions job
+ *                          (which takes a minute or two) finishes
  */
 
 export default {
@@ -50,19 +54,41 @@ export default {
     const normalized = text.replace(/[^a-zA-Zа-яА-ЯёЁ]/g, "").toLowerCase();
 
     if (chatId && normalized === "дз") {
-      await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "dz-bot-cloudflare-worker",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          event_type: "dz_request",
-          client_payload: { chat_id: String(chatId) },
-        }),
-      });
+      // Instant "please wait" reply, sent by the Worker itself — the actual
+      // homework goes out later from the GitHub Actions job (see below).
+      const ackPromise = fetch(
+        `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: "Подожди минуту-полторы, читаю дневник…",
+          }),
+        }
+      );
+
+      const dispatchPromise = fetch(
+        `https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "dz-bot-cloudflare-worker",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            event_type: "dz_request",
+            client_payload: { chat_id: String(chatId) },
+          }),
+        }
+      );
+
+      // Run both concurrently and wait for them before responding to
+      // Telegram — Workers only bill CPU time, not time spent waiting on
+      // these network calls, so this doesn't cost anything extra.
+      await Promise.all([ackPromise, dispatchPromise]);
     }
 
     // Telegram just needs a fast 200 — the real reply comes later from the
