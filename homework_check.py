@@ -108,40 +108,70 @@ def do_login(page, username: str, password: str) -> None:
 
 
 def read_day(page, son_id: int, target_date: date) -> list[dict]:
+    """Fetch homework for exactly `target_date`.
+
+    The /diary/date/<YYYY-MM-DD> URL renders the *whole remaining school
+    week* on one page (one .diary_day block per day, e.g. "Вторник
+    22.09.2026", "Среда 23.09.2026", ...) rather than a single day — so we
+    must scope the scrape to the one .diary_day block whose heading matches
+    target_date, not just grab every .diary_row on the page (which was
+    mixing in other days' subjects).
+    """
     url = f"{BASE_URL}/parent/{son_id}/diary/date/{target_date.isoformat()}"
     page.goto(url, wait_until="networkidle", timeout=30000)
 
     try:
-        page.wait_for_selector(".diary_row", timeout=8000)
+        page.wait_for_selector(".diary_day", timeout=8000)
     except PlaywrightTimeoutError:
         return []
 
+    date_str = target_date.strftime("%d.%m.%Y")  # matches heading format "Вторник 22.09.2026"
+
     return page.evaluate(
         """
-        () => {
+        (dateStr) => {
           function clean(html){
             return (html || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g,' ').trim();
           }
-          const rows = document.querySelectorAll('.diary_row');
+          const dayBlocks = document.querySelectorAll('.diary_day');
           const result = [];
-          rows.forEach(row => {
-            const cells = row.querySelectorAll(':scope > .diary_cell');
-            if (cells.length < 3) return;
-            const subject = clean(cells[2] ? cells[2].innerText : '');
-            if (!subject) return;
-            let homework = null;
-            const popovers = row.querySelectorAll('[data-bs-toggle="popover"]');
-            popovers.forEach(el => {
-              const title = el.getAttribute('data-bs-original-title') || '';
-              if (title.indexOf('Домашнее') !== -1) {
-                homework = clean(el.getAttribute('data-bs-content') || '');
+          dayBlocks.forEach(dayBlock => {
+            const heading = dayBlock.previousElementSibling
+              ? clean(dayBlock.previousElementSibling.textContent) : '';
+            if (heading.indexOf(dateStr) === -1) return;  // not the target day — skip
+
+            const rows = dayBlock.querySelectorAll('.diary_row');
+            rows.forEach(row => {
+              const cells = row.querySelectorAll(':scope > .diary_cell');
+              if (cells.length < 3) return;
+              const subject = clean(cells[2] ? cells[2].innerText : '');
+              if (!subject) return;
+              // A subject can have more than one homework link (Задание 1,
+              // Задание 2, ...) — each is its own popover with the same
+              // title, so collect every one of them instead of keeping
+              // only the last.
+              const hwTexts = [];
+              const popovers = row.querySelectorAll('[data-bs-toggle="popover"]');
+              popovers.forEach(el => {
+                const title = el.getAttribute('data-bs-original-title') || '';
+                if (title.indexOf('Домашнее') !== -1) {
+                  const t = clean(el.getAttribute('data-bs-content') || '');
+                  if (t) hwTexts.push(t);
+                }
+              });
+              let homework = null;
+              if (hwTexts.length === 1) {
+                homework = hwTexts[0];
+              } else if (hwTexts.length > 1) {
+                homework = hwTexts.map((t, i) => `Задание ${i + 1}: ${t}`).join('  ');
               }
+              result.push({subject, homework});
             });
-            result.push({subject, homework});
           });
           return result;
         }
-        """
+        """,
+        date_str,
     )
 
 
@@ -157,24 +187,18 @@ def format_summary(target_date: date, per_son: dict) -> str:
             lines.append("Нет данных об уроках на этот день (возможно, нет расписания/каникулы).")
             continue
 
-        no_homework_yet = []
         for lesson in lessons:
-            subject = lesson["subject"]
             hw = lesson.get("homework")
-            if hw:
-                lines.append(f"• {subject}: {hw}")
-            else:
-                no_homework_yet.append(subject)
-
-        if no_homework_yet:
-            lines.append("Без домашнего задания пока: " + ", ".join(no_homework_yet))
+            lines.append(f"• {lesson['subject']}: {hw if hw else '—'}")
 
     return "\n".join(lines)
 
 
 def send_telegram(text: str) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    # TELEGRAM_CHAT_ID can hold one id or several, comma-separated
+    # (e.g. "111111111,222222222,333333333") — the same message goes to everyone listed.
+    chat_ids = [c.strip() for c in os.environ["TELEGRAM_CHAT_ID"].split(",") if c.strip()]
     api_url = f"https://api.telegram.org/bot{token}/sendMessage"
 
     # Telegram messages are capped at 4096 chars — split on line boundaries if needed.
@@ -189,9 +213,10 @@ def send_telegram(text: str) -> None:
     if current:
         chunks.append(current)
 
-    for chunk in chunks:
-        resp = requests.post(api_url, data={"chat_id": chat_id, "text": chunk}, timeout=15)
-        resp.raise_for_status()
+    for chat_id in chat_ids:
+        for chunk in chunks:
+            resp = requests.post(api_url, data={"chat_id": chat_id, "text": chunk}, timeout=15)
+            resp.raise_for_status()
 
 
 MAX_DAYS_AHEAD = 14  # covers most school breaks; stop searching after two weeks
