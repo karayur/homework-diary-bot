@@ -11,7 +11,7 @@ your computer being on.
 2. Send `/newbot`, give it any name and a unique username ending in `bot`
    (e.g. `nyberg_homework_bot`).
 3. BotFather replies with a **token** like `123456789:AAH...` — save it,
-   you'll need it as `TELEGRAM_BOT_TOKEN`. 
+   you'll need it as `TELEGRAM_BOT_TOKEN`.
 4. Open a chat with your new bot and send it any message (e.g. "привет") —
    bots can't message you first, so this step is required once.
 5. Find your numeric chat id: open this URL in a browser (replace
@@ -19,7 +19,7 @@ your computer being on.
    `https://api.telegram.org/bot<TOKEN>/getUpdates`
    Look for `"chat":{"id":  ...}` in the JSON — that number is your
    `TELEGRAM_CHAT_ID`. (Alternative: message **@userinfobot**, it replies
-   with your id directly.) 
+   with your id directly.)
 
 ## 2. Create a GitHub repository
 
@@ -76,6 +76,111 @@ page later):
   silent 60-day gap is the one way this could quietly stop.
 - The date logic replicates what the original task did: tomorrow, or the
   next Monday if tomorrow is a weekend.
+
+## 6. Add the kids' Telegram accounts too
+
+Everyone listed gets the exact same message (both sons' homework combined) —
+this is the simplest setup, no per-son routing.
+
+1. Send each son the bot's link: `https://t.me/<bot_username>` (or they can
+   just search for the bot's username in Telegram).
+2. Each of them opens the chat and sends any message to the bot (e.g.
+   `/start`) — same one-time requirement as with your own chat in step 1.
+3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` again — you'll now
+   see a message entry per person, each with its own `"chat":{"id": ...}`.
+   Match them up by `"from":{"first_name": ...}` to know whose id is whose.
+4. Edit the existing `TELEGRAM_CHAT_ID` secret (**Settings → Secrets and
+   variables → Actions → TELEGRAM_CHAT_ID → Update**) and put all the ids
+   separated by commas, no spaces needed either way, e.g.:
+   `111111111,222222222,333333333`
+5. Re-run the workflow manually once (Actions → Run workflow) to confirm
+   everyone gets the message.
+
+No other secret or file needs to change — `homework_check.py` already
+splits `TELEGRAM_CHAT_ID` on commas and sends to each one.
+
+## 7. On-demand: reply when someone writes "дз"
+
+Anyone in the chat (you or the kids) can send the bot "дз" — any case,
+any punctuation ("Дз", "ДЗ!!!", "дз?" all count) — and get homework for
+the nearest school day back, addressed only to them (not broadcast to
+everyone). This needs one more free service — **Cloudflare Workers** — to
+catch the message the instant it arrives (GitHub alone can't react to a
+Telegram message in real time, only on its own schedule).
+
+How it fits together: Telegram → Cloudflare Worker (instant) → tells
+GitHub to run `dz_on_demand.yml` → that workflow logs in, reads the
+diary, and replies. The Worker never sees your diary password — it only
+forwards a trigger. Total time from message to reply is usually **1-3
+minutes** (most of it is GitHub Actions installing Playwright/Chromium
+and the actual login+scrape — the Worker itself reacts in well under a
+second).
+
+### 7.1 Create a GitHub token the Worker can use to trigger the workflow
+
+1. Go to **github.com/settings/tokens** → **Fine-grained tokens** → **Generate
+   new token**.
+2. Give it a name, set **Repository access** to "Only select repositories"
+   and pick this repo.
+3. Under **Permissions → Repository permissions**, set **Contents** to
+   **Read and write** (this is what allows sending a `repository_dispatch`
+   event).
+4. Generate it and save the token somewhere safe — you'll paste it into
+   Cloudflare next, and GitHub won't show it again.
+
+### 7.2 Create the Cloudflare Worker
+
+1. Sign up (free) at **dash.cloudflare.com** if you don't have an account.
+2. **Workers & Pages → Create → Create Worker**. Give it any name (e.g.
+   `dz-bot-webhook`) and deploy the default "Hello World" — you'll replace
+   the code next.
+3. Open the Worker → **Edit code**, delete everything, and paste in the
+   contents of `cloudflare-worker/worker.js` from this project. **Deploy**.
+4. Back in the Worker's **Settings → Variables and Secrets**, add three
+   **secret** variables (not plain text — use "Encrypt"):
+   | Name | Value |
+   |---|---|
+   | `GITHUB_REPO` | `your-username/your-repo-name` |
+   | `GITHUB_TOKEN` | the fine-grained token from step 7.1 |
+   | `WEBHOOK_SECRET` | any random string you make up (e.g. 20+ random characters) |
+5. Note the Worker's URL, shown at the top of its page — something like
+   `https://dz-bot-webhook.<your-subdomain>.workers.dev`.
+
+### 7.3 Point Telegram at the Worker
+
+Open this URL in a browser once (fill in your bot token, the Worker URL,
+and the same `WEBHOOK_SECRET` you set in step 7.2):
+
+```
+https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=<WORKER_URL>&secret_token=<WEBHOOK_SECRET>
+```
+
+You should get back `{"ok":true,"result":true,...}`. From now on Telegram
+pushes every message to the Worker instead of you having to poll for
+them.
+
+### 7.4 Test it
+
+Send "дз" to the bot from your phone. Within a couple of minutes you
+should get the homework for the nearest school day back. If nothing
+arrives: check the Worker's **Logs** tab in Cloudflare (to confirm it
+received the message and called GitHub), and the **Actions** tab in
+GitHub for a "DZ on-demand reply" run (to see if it fired and whether it
+failed at login/scraping, same debugging as the daily job).
+
+### Notes on this part
+
+- This only reacts to a message whose text, after stripping punctuation
+  and lowercasing, is exactly "дз" — "дз" on its own line, "Дз?", "ДЗ!!"
+  all match; "дз пожалуйста" (extra words) does not, by design, to avoid
+  false triggers.
+- The daily scheduled broadcast (`homework_diary.yml`) is unaffected —
+  this is a separate workflow (`dz_on_demand.yml`) that only replies to
+  whoever asked.
+- If you'd rather skip Cloudflare entirely and accept up to a ~5 minute
+  delay, the alternative is a GitHub Actions workflow polling Telegram's
+  `getUpdates` every 5 minutes (GitHub's minimum schedule interval) — let
+  me know and I can build that instead.
 
 ## Notes
 
